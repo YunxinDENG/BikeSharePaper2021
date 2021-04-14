@@ -1,10 +1,10 @@
-# Identifying locations for new bike-sharing stations in Glasgow: an analysis of spatial equity and demand factors. 
+# Identifying locations for new bike-sharing stations in Glasgow: an analysis of spatial equity and demand factors
 
 # Introduction
 This github repo deposits the R programming code to generate the regression analysis results.
 
 # Paper Citation
-Beairsto, J., Tian, Y., Zheng, L., Zhao, Q., & Hong, J. (2020). Identifying locations for new bike-sharing stations in Glasgow: An analysis of spatial equity and demand factors. https://doi.org/10.31219/osf.io/apyfn
+Beairsto, J., Tian, Y., Zheng, L., Zhao, Q., & Hong, J. (2021). Identifying locations for new bike-sharing stations in Glasgow: An analysis of spatial equity and demand factors. https://doi.org/10.31219/osf.io/apyfn
 
 
 # Acknowledgement
