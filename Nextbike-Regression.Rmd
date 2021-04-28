@@ -1,0 +1,239 @@
+---
+title: "Bike-sharing Demand Analysis"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+In this analysis, we determine factors affecting bike-sharing ridership in Glasgow, Scotland. To do so, we run an ordinary-least squares regression model, focusing on trip generation (i.e. the number of departing trips by station). 
+
+We obtained trip data from Nextbike (Glasgow's bike-sharing service operator) for one complete year: all trips from August 30th, 2018 to August 29, 2019 for a total of 63 stations. One station, Riverside Museum, was removed since it had no trips recorded until July of 2019. 
+
+
+```{r setup, message = FALSE, include=TRUE}
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(moderndive)
+library(tidyr)
+library(corrplot)
+library(ggpubr)
+library(leaps)
+library(MASS)
+library(car)
+library(glmnet)
+library(sjPlot)
+library(sjmisc)
+library(kableExtra)
+
+trips <- read.csv("NextBike Regression Data.csv", sep=',' ,header=T)
+
+#remove riverside museum
+trips <- trips[-15,]
+```
+
+The distribution of station ridership is skewed to the right, such that a majority of stations have less than 6000 total trips, however, a few stations have higher ridership. We, therefore, used the log-transformed station ridership in base 10 as the dependent variable in the regression analysis.
+
+
+```{r}
+#log transform ridership 
+trips$logcount=log10(trips$COUNT)
+```
+
+
+```{r, results='asis'}
+h1 <- trips %>%
+  ggplot(aes(COUNT)) + geom_histogram(binwidth=800, colour="black", fill="grey") +
+  theme_minimal() + labs(x="\nStation Ridership", y="Count")
+
+h2 <- trips %>%
+  ggplot(aes(logcount)) + geom_histogram(binwidth=0.09, colour="black", fill="grey") + theme_minimal() + labs(x="\nLog of Station Ridership", y="Count")
+
+#plot 2 histograms together 
+ggarrange(h1, h2,
+          ncol = 2, nrow = 1)
+```
+
+## Independent variables 
+
+We began with 11 potentially relevant independent variables, which were a mixture of socio-demographic factors, transportation and built environment factors. The 11 factors were selected based on their relevance to determining suitable locations for new stations, and their importance in predicting demand, found in previous studies. 
+
+1. Population density (people per square km)
+2. Job density (jobs per square km)
+3. Percentage of people aged 16-34 
+4. Percentage of households without a car
+5. Percentage of 17-21 year olds entering university
+6. Percentage of people who are income deprived
+7. Slope in degrees
+8. Network distance (m) to the nearest transit station (subway or railway) 
+9. Ratio of cycling lane distance to streets distance (within 500m buffer area)
+10. Euclidean distance in meters to Downtown (defined as a point in the center of George Square)
+11. Presence of a transit station (within 400m buffer area) 
+
+Since the number of nearby transit stations present is either 0,1 or 2, we converted it to a categorical variable (i.e. YES: 1 or 2 and NO: 0).
+
+The socio-demographic variables were obtained from the Scottish Index of Multiple Deprivation (SIMD) 2020 data, and the 2011 Scotland Census data (for the percentage of households without a car, and the percentage of the population aged 16-34).
+
+For each of the area-based variables, we used the Zonal Statistics tool in ArcGIS to calculate the mean value within a defined buffer area. We used a buffer of 300 meters for variables 1-6 as it represents the expected distance people are typically willing to walk to use a bike-sharing service. A slightly larger buffer area for slope and the cycling lane variables was used to capture more of the area that users may bike on once they rent a bike.
+
+## Regression Model
+
+### Lasso regression
+
+Due to the fact that our sample size is relatively small, with only 62 stations, it was necessary to reduce the number of variables for the regression model to prevent overfitting of the model. To do so, we began with a lasso regression, which is useful for identifying less important features that can be dropped. 
+
+By including all 11 variables in a lasso regression model, the coefficients for five variables – income deprivation, the slope, the presence of a nearby transit station, the no car percentage, and job density – were all reduced to zero and dropped from the model. We confirmed that these features should be removed through a correlation analysis and by examining scatterplots. 
+
+```{r, results='asis', tidy=TRUE}
+#LASSO REGRESSION
+#select columns with 11 independent variables & dependent logcount
+trips_selection  <- trips[,-c(1, 2, 3, 4, 8, 10, 16, 17, 21, 22)]
+
+# Predictor variables
+x <- model.matrix(logcount~., trips_selection)
+# Outcome variable
+y <- trips_selection$logcount
+
+#glmnet(x, y, alpha = 1, lambda = NULL)
+set.seed(123) 
+cv <- cv.glmnet(x, y, alpha = 1)
+
+# Display the best lambda value
+cv$lambda.min
+
+model <- glmnet(x, y, alpha = 1, lambda = cv$lambda.min)
+
+# Display regression coefficients
+df <- as.data.frame(as.matrix(coef(model)))
+kable(df)
+
+```
+
+
+```{r, results='asis', echo=FALSE}
+
+#box plot of transit station
+transit_st <- trips %>%
+  ggplot(aes(x = ST_NUM1, y = logcount)) + geom_boxplot() + ylab("Log of Ridership\n") + xlab("\nPresence of a transit station") + theme(axis.title.y = element_text(size=10)) + theme_minimal()
+
+#scatterplots
+no_car <- trips %>% 
+  ggplot(aes(x=NO_CAR,y=logcount)) + 
+  geom_point() + theme_minimal() + ylab("Log of Ridership\n") + xlab("\n% of households without a car")
+
+slope <- trips %>% 
+  ggplot(aes(x=slope,y=logcount)) + 
+  geom_point() + theme_minimal() + ylab("Log of Ridership\n") + xlab("\nSlope")
+
+income <- trips %>% 
+  ggplot(aes(x=income,y=logcount)) + ylab("Log of Ridership\n") + xlab("\n% income deprived") + geom_point() + theme_minimal() 
+
+ggarrange(no_car, slope,income, transit_st, ncol=2, nrow = 2)
+```
+
+```{r}
+
+#spearman's rank correlation plot
+trips_selection2  <- trips[,-c(1, 2, 4, 8, 10, 14, 16, 17, 21, 22)]
+
+cor <- cor(trips_selection2, method="spearman")
+colnames(cor) <- c("Ridership", "University (%)", "Income deprived (%)", "Employment deprived (%)", "Slope", "Downtown distance", "Population density", "Age 16-34 (%)", "Ratio of cycling lanes", "Transit station distance","No car (%)", "Job density", "Log ridership")
+rownames(cor) <- c("Ridership", "University (%)", "Income deprived (%)", "Employment deprived (%)", "Slope", "Downtown distance", "Population density", "Age 16-34 (%)", "Ratio of cycling lanes", "Transit station distance","No car (%)", "Job density", "Log ridership")
+corrplot(cor)
+
+```
+
+Analyzing the VIF values for the remaining variables selected, we foound that the age variable has a high VIF value of 4.7, attributed to the fact that it has a relatively high correlation with the distance from downtown (-0.68), and the employment deprivation rate (0.64). Therefore, we removed age from the final lasso regression model.
+
+```{r}
+lasso <- lm(logcount ~  ST_DIST + DOWNTOWN_DIST + CYL_PER1 + employment + uni + population_density + X16_34_PERCENT, data=trips)
+#check multicollinearity
+vif(lasso)
+```
+
+```{r, results='asis'}
+#final lasso regression model
+lm.all <- lm(logcount ~  ST_DIST + DOWNTOWN_DIST + CYL_PER1 + employment + uni + population_density, data=trips)
+tab_model(lm.all, pred.labels = c("Intercept", "Distance to nearest transit station (m)", "Distance to Downtown (m)", "Ratio of cycling lanes to streets", "Employment deprivation rate", "Percentage of 17-21 year olds entering university", "Population density"), digits = 4, digits.p = 4)
+```
+
+The lasso regression results show that the distance to the nearest transit station (m), the population density and university percentage variables are not significant at the 95% level of confidence. However, the distance to the nearest transit station is significant at the 90% level of confidence. 
+
+Examining the university percentage, and the population density variables in more detail shows that there is some positive correlation between ridership and the university percentage, as well as ridership and population density, However, the strength of the association appears relatively low.
+
+```{r}
+
+p1 <- trips %>% 
+  ggplot(aes(x=uni,y=logcount)) + 
+  labs(x="\nUniversity Percentage (Ages 17-21)", y="Log of Station Ridership\n") +
+  geom_point() + theme_minimal()
+
+p2 <- trips %>% 
+  ggplot(aes(x=population_density,y=logcount)) + 
+  labs(x="\nPopulation Density (people per square km)", y="") +
+  geom_point() + theme_minimal()
+
+#plot 2 scatterplots together 
+ggarrange(p1, p2,
+          ncol = 2, nrow = 1)
+```
+
+
+### Stepwise regression 
+
+For comparison purposes, we built a second model using a stepwise regression method. We checked both forward and backward selection using AIC criterion, and found that backward selection resulted in better model accuracy and fit. 
+
+```{r}
+#STEPWISE REGRESSION
+full.model <- lm(logcount~., data = trips_selection)
+
+step.model <- stepAIC(full.model, direction = "both",
+                      trace = FALSE)
+tab_model(step.model, pred.labels = c("Intercept", "Employment deprivation rate", "Distance to Downtown (m)", "Ratio of cycling lanes to streets","Distance to nearest transit station (m)"), digits = 4, digits.p = 4)
+
+#multicollinearity 
+vif(step.model)
+
+```
+
+### Stepwise regression removing outliers 
+
+Lastly, to further verify the significance of the variables, we ran a stepwise regression model with the three ‘outlier stations’ removed – the three stations with the highest number of trips. 
+
+```{r}
+#REMOVING 3 STATIONS WITH TOP TRIPS
+trips1 <- trips[-c(10,12, 13),]
+trips1$logcount=log10(trips1$COUNT)
+
+trips_selection1  <- trips1[,-c(1, 2, 3, 4, 8, 10, 16, 17, 21, 22)]
+full.model1 <- lm(logcount~., data = trips_selection1)
+
+step.model1 <- stepAIC(full.model1, direction = "both",
+                       trace = FALSE)
+tab_model(step.model1, pred.labels = c("Intercept", "Employment deprivation rate", "Distance to Downtown (m)", "Ratio of cycling lanes to streets","Distance to nearest transit station (m)"))
+
+#multicollinearity
+vif(step.model1)
+```
+
+In this third model, the same four variables remain significant, indicating that proximity to transit stations, cycling lanes, downtown and the employment deprivation rate, remain important determinants of demand even when the outliers (all stations in Downtown) are removed.
+
+## Model Fit & Accuracy
+
+Lastly, we compared the model fit and accuracy between the lasso regression and the stepwise regression. 
+
+```{r}
+
+#lasso regression
+par(mfrow = c(2,2))
+plot(lm.all)
+
+#stepwise regression
+par(mfrow = c(2,2))
+plot(step.model)
+```
+
+## Conclusions 
+
+Overall, we can conclude from this regression analysis that in Glasgow, increased distances to public transit and the city center are associated with lower bike-sharing demand. Additionally, bike-sharing ridership is significantly higher among populations that have fewer employment deprived residents, and in areas with a higher proportion of cycling lanes. 
+
